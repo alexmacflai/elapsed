@@ -1,63 +1,85 @@
 // File: VideoQueue.swift
 // Elapsed
 //
-// Provides a lightweight shuffled queue for local .mp4 files with preloading.
-// Update `videoFilenames` below to match the files you add to the project target.
+// Provides a lightweight shuffled queue for local video files with preloading.
+// STRICT: Scan ONLY the bundled "Videos" folder (blue folder reference), non-recursively.
 // Missing files are skipped automatically.
 
 import Foundation
 import AVFoundation
 
-// 1) Add your 9:16 videos to the Xcode project and ensure they are included in the app target.
-// 2) To make this auto-discover ONLY the files inside a bundled subfolder named "Videos":
-//    - In Xcode, make `Videos` a *Folder Reference* (blue folder), not just a Group (yellow).
-//    - If it's a Group, iOS bundles resources flat and there is no real "Videos" folder to enumerate.
-//
-// This app will auto-load all bundled .mp4 and .mov video resources.
-// Each video ID = filename (lastPathComponent) for persistence.
+// Allowed video extensions (case-insensitive)
+private let allowedVideoExts: Set<String> = ["mp4", "mov", "m4v"]
 
 private enum VideoLibrary {
-    /// Returns unique, sorted URLs for all bundled videos (.mp4 + .mov).
-    /// Prefers a real bundle subdirectory named "Videos" when present.
-    static func bundledVideoURLs() -> [URL] {
-        let exts = ["mp4", "mov"]
+    // Allowed video extensions (case-insensitive)
+    private static let allowedExts: Set<String> = ["mp4", "mov", "m4v"]
 
-        // Prefer enumerating within a real bundle subdirectory (works only with Folder Reference).
-        var urls: [URL] = []
-        for ext in exts {
-            urls.append(contentsOf: Bundle.main.urls(forResourcesWithExtension: ext, subdirectory: "Videos") ?? [])
+    /// Locate the bundled "Videos" folder (blue folder reference). If not at bundle root, search recursively for a directory named "Videos" (case-insensitive).
+    private static func videosFolderURL() -> URL? {
+        // Try expected root location first
+        if let direct = Bundle.main.resourceURL?.appendingPathComponent("Videos", isDirectory: true),
+           FileManager.default.fileExists(atPath: direct.path) {
+            return direct
         }
-
-        // Fallback: enumerate all bundled videos (works for Groups too).
-        if urls.isEmpty {
-            for ext in exts {
-                urls.append(contentsOf: Bundle.main.urls(forResourcesWithExtension: ext, subdirectory: nil) ?? [])
+        // Fallback: search the bundle recursively for a directory named "Videos"
+        if let root = Bundle.main.resourceURL,
+           let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            for case let url as URL in e {
+                if url.lastPathComponent.lowercased() == "videos" {
+                    var isDir: ObjCBool = false
+                    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                        return url
+                    }
+                }
             }
         }
-
-        // De-dupe + stable order
-        let unique = Array(Set(urls))
-        return unique.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        return nil
     }
 
-    /// Stable IDs used by persistence
-    static func bundledVideoIDs() -> [String] {
-        bundledVideoURLs().map { $0.lastPathComponent }
-    }
-
-    /// Resolve an ID back to a URL.
-    static func url(forVideoID id: String) -> URL? {
-        // Try a real bundle subdir first
-        if let url = Bundle.main.url(forResource: id, withExtension: nil, subdirectory: "Videos") {
-            return url
+    /// Returns URLs for all videos directly inside the bundled "Videos" folder (non-recursive).
+    static func videosFolderURLs() -> [URL] {
+        guard let folder = videosFolderURL() else {
+            #if DEBUG
+            print("[VideoQueue] Videos folder not found in bundle")
+            #endif
+            return []
         }
-        // Fallback (flat bundle)
-        return Bundle.main.url(forResource: id, withExtension: nil)
+        do {
+            let contents = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+            let filtered = contents.filter { allowedExts.contains($0.pathExtension.lowercased()) }
+            #if DEBUG
+            let names = filtered.map { $0.lastPathComponent }
+            print("[VideoQueue] Videos folder at \(folder.path) contains (\(names.count)):", names)
+            #endif
+            return filtered.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        } catch {
+            #if DEBUG
+            print("[VideoQueue] ERROR reading Videos folder:", error.localizedDescription)
+            #endif
+            return []
+        }
+    }
+
+    /// Stable IDs = filenames (with extension) from the Videos folder
+    static func videoIDs() -> [String] {
+        videosFolderURLs().map { $0.lastPathComponent }
+    }
+
+    /// Resolve an ID back to a URL inside the Videos folder
+    static func url(forVideoID id: String) -> URL? {
+        guard let folder = videosFolderURL() else { return nil }
+        let direct = folder.appendingPathComponent(id)
+        if FileManager.default.fileExists(atPath: direct.path) { return direct }
+        #if DEBUG
+        print("[VideoQueue] Could not resolve video ID in Videos folder:", id)
+        #endif
+        return nil
     }
 }
 
-/// Auto-discovered stable video IDs (filenames with extension). Use these for persistence keys.
-public let videoFilenames: [String] = VideoLibrary.bundledVideoIDs()
+/// Dynamic discovery of filenames in the Videos folder each time it's called.
+public func videoFilenames() -> [String] { VideoLibrary.videoIDs() }
 
 /// A simple queue that shuffles local video filenames and prepares AVPlayers.
 struct VideoQueue {
@@ -72,24 +94,23 @@ struct VideoQueue {
 
     init() {
         resetAndReshuffle()
+        #if DEBUG
+        print("[VideoQueue] Initial IDs (\(videoFilenames().count)):", videoFilenames())
+        #endif
     }
 
     /// Rebuilds the shuffled order with a fresh seed and clears caches.
     mutating func resetAndReshuffle() {
         order = shuffledAvoidingImmediateRepeat(last: lastPlayed)
         preparedNextPlayer = nil
-        // Do not call prepare recursively; let caller or next call prepare.
         prepareNextIfNeeded()
     }
 
     /// Returns a prepared AVPlayer for the next item and advances the queue.
     /// If none available, tries to reshuffle and attempt again.
     mutating func dequeuePreparedPlayer() -> AVPlayer? {
-        if preparedNextPlayer == nil {
-            prepareNextIfNeeded()
-        }
+        if preparedNextPlayer == nil { prepareNextIfNeeded() }
         guard let player = preparedNextPlayer else {
-            // Attempt a single reshuffle and try again
             order = shuffledAvoidingImmediateRepeat(last: lastPlayed)
             prepareNextIfNeeded()
             let p = preparedNextPlayer
@@ -102,9 +123,7 @@ struct VideoQueue {
 
     /// Returns the next prepared player without consuming it.
     mutating func peekPreparedNextPlayer() -> AVPlayer? {
-        if preparedNextPlayer == nil {
-            prepareNextIfNeeded()
-        }
+        if preparedNextPlayer == nil { prepareNextIfNeeded() }
         return preparedNextPlayer
     }
 
@@ -119,10 +138,9 @@ struct VideoQueue {
         }
 
         // Second pass: reshuffle once and try again if we have filenames
-        guard !videoFilenames.isEmpty else { return }
+        guard !videoFilenames().isEmpty else { return }
         order = shuffledAvoidingImmediateRepeat(last: lastPlayed)
         preparedNextPlayer = prepareFromCurrentOrder()
-        // If still nil, we stop; caller can decide what to do.
     }
 
     /// Attempts to pop the next valid filename from `order` and create a prepared AVPlayer.
@@ -130,9 +148,11 @@ struct VideoQueue {
         while !order.isEmpty {
             let filename = order.removeFirst()
 
-            // Resolve from bundle (prefer Videos/ subdir when present)
+            // Resolve from Videos folder only
             guard let url = VideoLibrary.url(forVideoID: filename) else {
-                // Skip missing files
+                #if DEBUG
+                print("[VideoQueue] Skipping missing file in Videos folder:", filename)
+                #endif
                 continue
             }
 
@@ -144,12 +164,7 @@ struct VideoQueue {
 
             // Kick off loading work so it's ready by the time we switch (async load)
             Task.detached {
-                do {
-                    let _ = try await asset.load(.isPlayable)
-                    // no-op; just ensuring asset begins to load
-                } catch {
-                    // Ignore; failure to preload shouldn't crash
-                }
+                _ = try? await asset.load(.isPlayable)
             }
 
             lastPlayed = filename
@@ -160,7 +175,7 @@ struct VideoQueue {
 
     /// Utility: returns a shuffled array avoiding an immediate repeat of `last` when possible.
     private func shuffledAvoidingImmediateRepeat(last: String?) -> [String] {
-        var shuffled = videoFilenames.shuffled()
+        var shuffled = videoFilenames().shuffled()
         if let last, shuffled.first == last, shuffled.count > 1 {
             shuffled.swapAt(0, 1)
         }

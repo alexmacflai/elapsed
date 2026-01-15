@@ -37,6 +37,21 @@ struct ContentView: View {
     // We keep a reference to the queue which handles shuffle + preloading
     @State private var queue = VideoQueue()
 
+    // Split 2: Boredom persistence and ephemeral playback state
+    @StateObject private var boredomStore = BoredomStore()
+
+    // Ephemeral per-playback state
+    @State private var boredSkipActive: Bool = false
+    @State private var boredSkipTimerRemaining: Double = 5.0
+    @State private var boredSkipTriggeredThisPlay: Bool = false
+    @State private var expandedBoredom: Bool = false
+    @State private var borderOpacity: Double = 0.0
+
+    // Timers
+    @State private var boredCountdownTimer: Timer? = nil
+    @State private var boredAccumulationTimer: Timer? = nil
+    @State private var lastAccumulationTick: Date? = nil
+
     // Transition timing
     private let transitionDuration: TimeInterval = 1.2 // keep in sync with the .animation duration
     private var transitionLeadTime: TimeInterval { transitionDuration } // start transition this many seconds before A ends
@@ -60,13 +75,13 @@ struct ContentView: View {
 
                 ZStack(alignment: .top) {
                     // Video A: y = 0 -> -H
-                    transitioningLayer(player: currentPlayer, viewID: currentPlayerViewID)
+                    transitioningLayer(player: currentPlayer, viewID: currentPlayerViewID, isCurrent: true)
                         .frame(width: W, height: H)
                         .offset(y: -H * p)
                         .opacity(1 - p) // keep your linear opacity rule
 
                     // Video B: y = +H -> 0
-                    transitioningLayer(player: nextPlayer, viewID: nextPlayerViewID)
+                    transitioningLayer(player: nextPlayer, viewID: nextPlayerViewID, isCurrent: false)
                         .frame(width: W, height: H)
                         .offset(y: H * (1 - p))
                 }
@@ -88,27 +103,13 @@ struct ContentView: View {
             .padding(.top, 18)
             .padding(.trailing, 16)
 
-            // Persistent bottom-right "I'm bored" button
-            Button(action: { boredButtonTapped() }) {
-                HStack(spacing: 10) {
-                    Image(systemName: "hand.thumbsdown.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                    Text("I’m bored")
-                        .font(.system(size: 16, weight: .semibold))
-                }
-                .foregroundStyle(.white)
-                .padding(.vertical, 12)
-                .padding(.horizontal, 14)
-                .background(Color.black.opacity(0.35))
-                .clipShape(Capsule())
-            }
-            .padding(.trailing, 16)
-            .padding(.bottom, 22)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            // Removed persistent bottom-right "I'm bored" button per instructions
         }
         .onAppear {
             prepareInitialPlayers()
             installPreEndObserverIfNeeded()
+            // Attempt to mark the initial playback start if already playing
+            newPlaybackStartedIfPossible()
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhase(newPhase)
@@ -127,9 +128,8 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $isStatsPresented, onDismiss: {
-            // Resume playback + timers when drawer closes
-            stats.resumeAfterInvisibility()
-            currentPlayer?.play()
+            // Drawer closed: no playback resume needed (video keeps playing while the drawer is open).
+            // Keep timers running as-is.
         }) {
             StatsDrawer()
                 .presentationDetents([.fraction(0.7)])
@@ -138,15 +138,15 @@ struct ContentView: View {
                 .interactiveDismissDisabled(false)
                 .environmentObject(stats)
                 .onAppear {
-                    // Pause playback + timers when drawer opens
-                    stats.pauseForInvisibility()
-                    currentPlayer?.pause()
+                    // Drawer opened: keep playback running.
                     stats.flushNow()
                 }
         }
         .onDisappear {
             readyTimer?.invalidate(); readyTimer = nil
             removePreEndObserver()
+            boredCountdownTimer?.invalidate(); boredCountdownTimer = nil
+            boredAccumulationTimer?.invalidate(); boredAccumulationTimer = nil
         }
         // Optional debug advance: enable for testing only
         // .contentShape(Rectangle())
@@ -155,7 +155,7 @@ struct ContentView: View {
 
     // MARK: - Transitioning Layer
     @ViewBuilder
-    private func transitioningLayer(player: AVPlayer?, viewID: UUID) -> some View {
+    private func transitioningLayer(player: AVPlayer?, viewID: UUID, isCurrent: Bool) -> some View {
         ZStack(alignment: .bottomTrailing) {
             // Video fills the screen (aspect fill / crop)
             PlayerView(player: player)
@@ -170,22 +170,61 @@ struct ContentView: View {
             )
             .frame(height: 220)
             .frame(maxWidth: .infinity, alignment: .bottom)
-            .allowsHitTesting(false)
 
-            // Right-side column placeholder (aligned bottom)
-            VStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.0))
-                    .frame(width: 48, height: 48)
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.0))
-                    .frame(width: 48, height: 48)
+            // Right-side bored control (aligned bottom)
+            let filename = currentFilename(for: player)
+            let instanceCount = (filename != nil) ? boredomStore.instanceCount(for: filename!) : 0
+            let timeAccum = (filename != nil) ? boredomStore.getBoredomTime(for: filename!) : 0
+            let countdownProgress = max(0.0, min(1.0, (5.0 - boredSkipTimerRemaining) / 5.0))
+
+            VStack(spacing: 6) {
+                // Bored button container and progress border
+                Button(action: { if isCurrent { boredButtonTapped() } }) {
+                    VStack(spacing: 6) {
+                        Image(systemName: "zzz")
+                            .font(.system(size: 22, weight: .bold))
+                        Text("\(instanceCount)")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 14)
+                    .frame(width: 72)
+                    .background(Color.black.opacity(0.45))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        ZStack {
+                            // Always show a faint base border for visibility
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(Color.white.opacity(0.18), lineWidth: 1.5)
+                            // Progress border when countdown is active
+                            if isCurrent && boredSkipActive {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .trim(from: 0, to: countdownProgress)
+                                    .stroke(Color.white.opacity(borderOpacity), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                                    .animation(.linear(duration: 0.05), value: countdownProgress)
+                            }
+                        }
+                    )
+                    .shadow(color: Color.black.opacity(0.6), radius: 8, x: 0, y: 3)
+                }
+                .disabled(!(isCurrent && !expandedBoredom && !isTransitioning && !isStatsPresented))
+                .allowsHitTesting(isCurrent && !expandedBoredom && !isTransitioning && !isStatsPresented)
+
+                // Expanded info when tapped (2s)
+                if isCurrent && expandedBoredom {
+                    Text("Bored on this video for: \(formatBoredTime(timeAccum))")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.9))
+                        .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: 220, alignment: .trailing)
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                }
             }
             .padding(.trailing, 12)
             .padding(.bottom, 28)
-            .allowsHitTesting(false)
+            .zIndex(5)
         }
-        .accessibilityHidden(true) // No interactive controls in Split 1
     }
 
     // MARK: - Loading View
@@ -273,7 +312,7 @@ struct ContentView: View {
     }
 
     private func maybeStartTransitionBeforeEnd() {
-        guard scenePhase == .active, !isTransitioning, !isStatsPresented else { return }
+        guard scenePhase == .active, !isTransitioning else { return }
         guard let item = currentPlayer?.currentItem else { return }
 
         let dur = item.duration
@@ -292,15 +331,26 @@ struct ContentView: View {
     private func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
-            if !isStatsPresented {
-                currentPlayer?.play()
-                currentPlayer?.isMuted = true
+            currentPlayer?.play()
+            currentPlayer?.isMuted = true
+            // Resume timers when app becomes active
+            if boredSkipActive && boredSkipTimerRemaining > 0 {
+                startBoredCountdown()
             }
-            stats.resumeAfterInvisibility()
-        case .inactive, .background:
-            currentPlayer?.pause()
-            stats.pauseForInvisibility()
+            if let filename = currentFilename(for: currentPlayer), boredomStore.isDeclared(for: filename) {
+                startAccumulation()
+            }
+        case .inactive:
+            // Sheets (like the stats drawer) can cause transient inactive states.
+            // Do NOT pause countdown/accumulation for that.
             stats.flushNow()
+
+        case .background:
+            currentPlayer?.pause()
+            stats.flushNow()
+            // Pause timers only when the app actually goes to background.
+            boredCountdownTimer?.invalidate(); boredCountdownTimer = nil
+            stopAccumulation()
         @unknown default:
             break
         }
@@ -320,8 +370,9 @@ struct ContentView: View {
             currentPlayerViewID = UUID()
             installPreEndObserverIfNeeded()
             currentPlayer?.isMuted = true
-            if !isStatsPresented && scenePhase == .active {
+            if scenePhase == .active {
                 currentPlayer?.play()
+                newPlaybackStartedIfPossible()
             }
             // Start readiness check to avoid black flash
             startReadyCheckTimer()
@@ -333,8 +384,9 @@ struct ContentView: View {
                 currentPlayerViewID = UUID()
                 installPreEndObserverIfNeeded()
                 currentPlayer?.isMuted = true
-                if !isStatsPresented && scenePhase == .active {
+                if scenePhase == .active {
                     currentPlayer?.play()
+                    newPlaybackStartedIfPossible()
                 }
                 startReadyCheckTimer()
             } else {
@@ -351,15 +403,33 @@ struct ContentView: View {
 
     // MARK: - I’m bored button
     private func boredButtonTapped() {
-        // Split 1: UI hook. Actual behavior (mark boring, bored time, skip countdown) lives in later splits.
-        // For now, do nothing except ensure the control is visible and tappable.
-        // (Optional for testing: uncomment to advance)
-        // advanceToNextVideo()
+        guard scenePhase == .active else { return }
+        guard !expandedBoredom else { return }
+        guard let filename = currentFilename(for: currentPlayer) else { return }
+
+        // Persist boredom instance and declaration
+        boredomStore.incrementInstance(for: filename)
+        boredomStore.declareBoredomIfNeeded(for: filename)
+
+        // Expand UI for 2 seconds
+        expandedBoredom = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                expandedBoredom = false
+            }
+        }
+
+        // Start skip countdown once per playback
+        if !boredSkipTriggeredThisPlay {
+            boredSkipTriggeredThisPlay = true
+            boredSkipActive = true
+            startBoredCountdown()
+        }
     }
 
     // MARK: - Advance logic with animation
-    private func advanceToNextVideo() {
-        guard scenePhase == .active, !isTransitioning, !isStatsPresented else { return }
+    private func advanceToNextVideo(force: Bool = false) {
+        guard scenePhase == .active, !isTransitioning else { return }
 
         stats.flushNow()
 
@@ -398,7 +468,7 @@ struct ContentView: View {
             nextPlayer?.seek(to: .zero)
         }
         nextPlayer?.isMuted = true
-        if !isStatsPresented && scenePhase == .active {
+        if scenePhase == .active {
             nextPlayer?.play()
         }
 
@@ -428,7 +498,10 @@ struct ContentView: View {
                 installPreEndObserverIfNeeded()
                 // IMPORTANT: do NOT seek here. B is already playing during the transition.
                 currentPlayer?.isMuted = true
-                if !isStatsPresented && scenePhase == .active { currentPlayer?.play() }
+                if scenePhase == .active {
+                    currentPlayer?.play()
+                    newPlaybackStarted()
+                }
 
                 // Reset instantly for the next cycle (no animation).
                 transitionProgress = 0
@@ -439,6 +512,98 @@ struct ContentView: View {
             nextPlayer = upcomingNext
             nextPlayerViewID = UUID()
         }
+    }
+
+    // MARK: - Split 2 Helpers
+    private func currentFilename(for player: AVPlayer?) -> String? {
+        guard let item = player?.currentItem else { return nil }
+        if let urlAsset = item.asset as? AVURLAsset { return urlAsset.url.lastPathComponent }
+        return nil
+    }
+
+    private func formatBoredTime(_ seconds: Double) -> String {
+        if seconds < 60 { return String(format: "%.0fs", seconds) }
+        let minutes = Int(seconds) / 60
+        let remSec = Int(seconds) % 60
+        if minutes < 60 { return "\(minutes)m \(remSec)s" }
+        let hours = minutes / 60
+        let remMin = minutes % 60
+        return "\(hours)h \(remMin)m"
+    }
+
+    private func resetEphemeralForNewPlayback() {
+        boredSkipActive = false
+        boredSkipTimerRemaining = 5.0
+        boredSkipTriggeredThisPlay = false
+        expandedBoredom = false
+        borderOpacity = 0.0
+    }
+
+    private func newPlaybackStarted() {
+        boredomStore.incrementTotalVideoPlays()
+        resetEphemeralForNewPlayback()
+        // Start accumulation only if declared boring
+        if let filename = currentFilename(for: currentPlayer), boredomStore.isDeclared(for: filename) {
+            startAccumulation()
+        } else {
+            stopAccumulation()
+        }
+    }
+
+    private func newPlaybackStartedIfPossible() {
+        if currentPlayer?.timeControlStatus == .playing {
+            newPlaybackStarted()
+        }
+    }
+
+    // MARK: Countdown handling
+    private func startBoredCountdown() {
+        boredCountdownTimer?.invalidate()
+        boredSkipTimerRemaining = max(0, boredSkipTimerRemaining)
+        borderOpacity = 1.0
+        boredCountdownTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            tickCountdown()
+        }
+        RunLoop.main.add(boredCountdownTimer!, forMode: .common)
+    }
+
+    private func tickCountdown() {
+        guard scenePhase == .active, boredSkipActive, !isTransitioning else { return }
+        boredSkipTimerRemaining -= 0.05
+        if boredSkipTimerRemaining <= 0 {
+            boredSkipTimerRemaining = 0
+            withAnimation(.easeOut(duration: 0.35)) { borderOpacity = 0.0 }
+            boredCountdownTimer?.invalidate(); boredCountdownTimer = nil
+            // Trigger transition to next video
+            advanceToNextVideo(force: true)
+        } else {
+            borderOpacity = 1.0
+        }
+    }
+
+    // MARK: Accumulation handling
+    private func startAccumulation() {
+        lastAccumulationTick = Date()
+        boredAccumulationTimer?.invalidate()
+        boredAccumulationTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+            tickAccumulation()
+        }
+        RunLoop.main.add(boredAccumulationTimer!, forMode: .common)
+    }
+
+    private func stopAccumulation() {
+        boredAccumulationTimer?.invalidate(); boredAccumulationTimer = nil
+        lastAccumulationTick = nil
+    }
+
+    private func tickAccumulation() {
+        guard scenePhase == .active, !isStatsPresented else { return }
+        guard let filename = currentFilename(for: currentPlayer) else { return }
+        guard boredomStore.isDeclared(for: filename) else { return }
+        let now = Date()
+        let delta = now.timeIntervalSince(lastAccumulationTick ?? now)
+        lastAccumulationTick = now
+        if delta > 0 { boredomStore.accumulateTime(for: filename, delta: delta) }
     }
 }
 
