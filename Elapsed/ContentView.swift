@@ -127,20 +127,26 @@ struct ContentView: View {
                 errorView
             }
         }
-        .sheet(isPresented: $isStatsPresented, onDismiss: {
-            // Drawer closed: no playback resume needed (video keeps playing while the drawer is open).
-            // Keep timers running as-is.
-        }) {
-            StatsDrawer()
-                .presentationDetents([.fraction(0.7)])
-                .presentationBackground(.ultraThinMaterial)
-                .presentationCornerRadius(20)
-                .interactiveDismissDisabled(false)
-                .environmentObject(stats)
-                .onAppear {
-                    // Drawer opened: keep playback running.
-                    stats.flushNow()
-                }
+        .sheet(isPresented: $isStatsPresented) {
+            NavigationStack {
+                StatsDrawer()
+                    .navigationTitle("Stats")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button {
+                                isStatsPresented = false
+                            } label: {
+                                Image(systemName: "xmark")
+                            }
+                        }
+                    }
+            }
+            .presentationDetents([.fraction(0.4)])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
+            .preferredColorScheme(.dark)
+            .environmentObject(stats)
         }
         .onDisappear {
             readyTimer?.invalidate(); readyTimer = nil
@@ -341,9 +347,7 @@ struct ContentView: View {
                 startAccumulation()
             }
         case .inactive:
-            // Sheets (like the stats drawer) can cause transient inactive states.
-            // Do NOT pause countdown/accumulation for that.
-            stats.flushNow()
+            break
 
         case .background:
             currentPlayer?.pause()
@@ -409,6 +413,7 @@ struct ContentView: View {
 
         // Persist boredom instance and declaration
         boredomStore.incrementInstance(for: filename)
+        stats.addBoredomInstance(for: filename)
         boredomStore.declareBoredomIfNeeded(for: filename)
 
         // Expand UI for 2 seconds
@@ -430,8 +435,6 @@ struct ContentView: View {
     // MARK: - Advance logic with animation
     private func advanceToNextVideo(force: Bool = false) {
         guard scenePhase == .active, !isTransitioning else { return }
-
-        stats.flushNow()
 
         // Prefer the preloaded next if available
         let hadPreloaded = (nextPlayer != nil)
@@ -541,6 +544,7 @@ struct ContentView: View {
 
     private func newPlaybackStarted() {
         boredomStore.incrementTotalVideoPlays()
+        stats.incrementPlays()
         resetEphemeralForNewPlayback()
         // Start accumulation only if declared boring
         if let filename = currentFilename(for: currentPlayer), boredomStore.isDeclared(for: filename) {
@@ -568,7 +572,7 @@ struct ContentView: View {
     }
 
     private func tickCountdown() {
-        guard scenePhase == .active, boredSkipActive, !isTransitioning else { return }
+        guard scenePhase == .active, boredSkipActive else { return }
         boredSkipTimerRemaining -= 0.05
         if boredSkipTimerRemaining <= 0 {
             boredSkipTimerRemaining = 0
@@ -597,13 +601,16 @@ struct ContentView: View {
     }
 
     private func tickAccumulation() {
-        guard scenePhase == .active, !isStatsPresented else { return }
+        guard scenePhase == .active else { return }
         guard let filename = currentFilename(for: currentPlayer) else { return }
         guard boredomStore.isDeclared(for: filename) else { return }
         let now = Date()
         let delta = now.timeIntervalSince(lastAccumulationTick ?? now)
         lastAccumulationTick = now
-        if delta > 0 { boredomStore.accumulateTime(for: filename, delta: delta) }
+        if delta > 0 {
+            boredomStore.accumulateTime(for: filename, delta: delta)
+            stats.addBoredomTime(for: filename, delta: delta)
+        }
     }
 }
 
