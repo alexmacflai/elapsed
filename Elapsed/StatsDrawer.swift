@@ -27,14 +27,19 @@ struct StatsDrawer: View {
 
     // MARK: - Formatting helpers
     private func formattedElapsed(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds.rounded())
-        if s < 60 { return "\(s)s" }
-        let m = s / 60
-        let r = s % 60
-        if m < 60 { return "\(m)m \(r)s" }
-        let h = m / 60
-        let rm = m % 60
-        return "\(h)h \(rm)m"
+        let total = max(0, Int(seconds.rounded()))
+
+        let s = total % 60
+        let m = (total / 60) % 60
+        let h = total / 3600
+
+        if h > 0 {
+            return "\(h)h \(m)m \(s)s"
+        } else if m > 0 {
+            return "\(m)m \(s)s"
+        } else {
+            return "\(s)s"
+        }
     }
 }
 
