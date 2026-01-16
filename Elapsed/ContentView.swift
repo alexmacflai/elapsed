@@ -110,6 +110,9 @@ struct ContentView: View {
         .onAppear {
             prepareInitialPlayers()
             installPreEndObserverIfNeeded()
+            if scenePhase == .active {
+                stats.startRealElapsedTimer()
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhase(newPhase)
@@ -133,7 +136,7 @@ struct ContentView: View {
                     .navigationTitle("Stats")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
+                        ToolbarItem(placement: .topBarTrailing) {
                             Button {
                                 isStatsPresented = false
                             } label: {
@@ -142,13 +145,15 @@ struct ContentView: View {
                         }
                     }
             }
-            .presentationDetents([.fraction(0.4)])
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+            .presentationContentInteraction(.scrolls)
             .presentationCornerRadius(28)
             .preferredColorScheme(.dark)
             .environmentObject(stats)
         }
         .onDisappear {
+            stats.stopRealElapsedTimer()
             readyTimer?.invalidate(); readyTimer = nil
             removePreEndObserver()
             boredCountdownTimer?.invalidate(); boredCountdownTimer = nil
@@ -339,6 +344,7 @@ struct ContentView: View {
         case .active:
             currentPlayer?.play()
             currentPlayer?.isMuted = true
+            stats.startRealElapsedTimer()
             // Resume timers when app becomes active
             if boredSkipActive && boredSkipTimerRemaining > 0 {
                 startBoredCountdown()
@@ -350,6 +356,7 @@ struct ContentView: View {
         case .background:
             currentPlayer?.pause()
             stats.flushNow()
+            stats.stopRealElapsedTimer()
             // Pause timers only when the app actually goes to background.
             boredCountdownTimer?.invalidate(); boredCountdownTimer = nil
             stopAccumulation()
@@ -504,9 +511,18 @@ struct ContentView: View {
 
                 // Promote the incoming player to become current
                 currentPlayer = newPlayer
-                // Carry over the incoming layer identity to current, so the old frame can't flash.
+                // Keep the incoming layer identity so the swap doesn't flash.
                 currentPlayerViewID = nextPlayerViewID
+
+                // IMPORTANT:
+                // During the swap, both layers would otherwise briefly reference the same player/ID
+                // (currentPlayer == nextPlayer), which can cause a one-frame "blink".
+                // Clear the off-screen layer immediately; we'll restore it right after.
+                nextPlayer = nil
+                nextPlayerViewID = UUID()
+
                 installPreEndObserverIfNeeded()
+
                 // IMPORTANT: do NOT seek here. B is already playing during the transition.
                 currentPlayer?.isMuted = true
                 if scenePhase == .active {
