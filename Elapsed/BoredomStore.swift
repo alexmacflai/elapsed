@@ -18,6 +18,7 @@ struct BoredomRecord: Codable, Equatable {
 }
 
 // MARK: - Store
+@MainActor
 final class BoredomStore: ObservableObject {
     @Published private(set) var records: [String: BoredomRecord] = [:] // key: filename
     @Published private(set) var totalVideoPlays: Int = 0
@@ -66,15 +67,15 @@ final class BoredomStore: ObservableObject {
     }
 
     func getBoredomTime(for filename: String) -> Double {
-        record(for: filename).boredomTimeAccumulated
+        records[filename]?.boredomTimeAccumulated ?? 0
     }
 
     func isDeclared(for filename: String) -> Bool {
-        record(for: filename).boredomDeclared
+        records[filename]?.boredomDeclared ?? false
     }
 
     func instanceCount(for filename: String) -> Int {
-        record(for: filename).boredomInstance
+        records[filename]?.boredomInstance ?? 0
     }
 
     func incrementTotalVideoPlays() {
@@ -96,29 +97,41 @@ final class BoredomStore: ObservableObject {
         self.totalVideoPlays = defaults.integer(forKey: totalPlaysKey)
     }
 
-    private func save() {
-        let defaults = UserDefaults.standard
-        do {
-            let data = try JSONEncoder().encode(records)
-            defaults.set(data, forKey: recordsKey)
-            defaults.set(totalVideoPlays, forKey: totalPlaysKey)
-        } catch {
-            // ignore errors for this simple store
-        }
-    }
-
     private func scheduleSave() {
-        saveQueue.async { [weak self] in
-            self?.save()
+        let snapshotRecords = records
+        let snapshotTotal = totalVideoPlays
+        let rKey = recordsKey
+        let tKey = totalPlaysKey
+        saveQueue.async {
+            let defaults = UserDefaults.standard
+            do {
+                let data = try JSONEncoder().encode(snapshotRecords)
+                defaults.set(data, forKey: rKey)
+                defaults.set(snapshotTotal, forKey: tKey)
+            } catch {
+                // ignore errors for this simple store
+            }
         }
     }
 
     private func scheduleSaveDebounced() {
         saveWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.save()
+        let snapshotRecords = records
+        let snapshotTotal = totalVideoPlays
+        let rKey = recordsKey
+        let tKey = totalPlaysKey
+        let work = DispatchWorkItem {
+            let defaults = UserDefaults.standard
+            do {
+                let data = try JSONEncoder().encode(snapshotRecords)
+                defaults.set(data, forKey: rKey)
+                defaults.set(snapshotTotal, forKey: tKey)
+            } catch {
+                // ignore errors for this simple store
+            }
         }
         saveWorkItem = work
         saveQueue.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 }
+

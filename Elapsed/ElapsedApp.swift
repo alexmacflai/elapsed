@@ -21,6 +21,7 @@ struct ElapsedApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(stats)
+                .preferredColorScheme(.dark)
         }
     }
 }
