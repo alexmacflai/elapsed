@@ -34,6 +34,8 @@ struct ContentView: View {
     @State private var readyTimer: Timer? = nil
     @State private var readyCheckDeadline: Date? = nil
 
+    @State private var didStartInitialPlaybackStats: Bool = false
+
     // We keep a reference to the queue which handles shuffle + preloading
     @State private var queue = VideoQueue()
 
@@ -108,8 +110,6 @@ struct ContentView: View {
         .onAppear {
             prepareInitialPlayers()
             installPreEndObserverIfNeeded()
-            // Attempt to mark the initial playback start if already playing
-            newPlaybackStartedIfPossible()
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhase(newPhase)
@@ -343,9 +343,7 @@ struct ContentView: View {
             if boredSkipActive && boredSkipTimerRemaining > 0 {
                 startBoredCountdown()
             }
-            if let filename = currentFilename(for: currentPlayer), boredomStore.isDeclared(for: filename) {
-                startAccumulation()
-            }
+            startAccumulation()
         case .inactive:
             break
 
@@ -376,7 +374,12 @@ struct ContentView: View {
             currentPlayer?.isMuted = true
             if scenePhase == .active {
                 currentPlayer?.play()
-                newPlaybackStartedIfPossible()
+
+                // Always start stats/timers for the very first playback (even if AVPlayer is still buffering).
+                if !didStartInitialPlaybackStats {
+                    didStartInitialPlaybackStats = true
+                    newPlaybackStarted()
+                }
             }
             // Start readiness check to avoid black flash
             startReadyCheckTimer()
@@ -390,7 +393,12 @@ struct ContentView: View {
                 currentPlayer?.isMuted = true
                 if scenePhase == .active {
                     currentPlayer?.play()
-                    newPlaybackStartedIfPossible()
+
+                    // Always start stats/timers for the very first playback (even if AVPlayer is still buffering).
+                    if !didStartInitialPlaybackStats {
+                        didStartInitialPlaybackStats = true
+                        newPlaybackStarted()
+                    }
                 }
                 startReadyCheckTimer()
             } else {
@@ -546,16 +554,14 @@ struct ContentView: View {
         boredomStore.incrementTotalVideoPlays()
         stats.incrementPlays()
         resetEphemeralForNewPlayback()
-        // Start accumulation only if declared boring
-        if let filename = currentFilename(for: currentPlayer), boredomStore.isDeclared(for: filename) {
-            startAccumulation()
-        } else {
-            stopAccumulation()
-        }
+        // Always accumulate elapsed time for stats; boredom time is still gated inside tickAccumulation().
+        startAccumulation()
     }
 
     private func newPlaybackStartedIfPossible() {
+        guard !didStartInitialPlaybackStats else { return }
         if currentPlayer?.timeControlStatus == .playing {
+            didStartInitialPlaybackStats = true
             newPlaybackStarted()
         }
     }
@@ -603,11 +609,13 @@ struct ContentView: View {
     private func tickAccumulation() {
         guard scenePhase == .active else { return }
         guard let filename = currentFilename(for: currentPlayer) else { return }
-        guard boredomStore.isDeclared(for: filename) else { return }
         let now = Date()
         let delta = now.timeIntervalSince(lastAccumulationTick ?? now)
         lastAccumulationTick = now
         if delta > 0 {
+            // Only accumulate once this video has been marked as boring.
+            guard boredomStore.isDeclared(for: filename) else { return }
+
             boredomStore.accumulateTime(for: filename, delta: delta)
             stats.addBoredomTime(for: filename, delta: delta)
         }
