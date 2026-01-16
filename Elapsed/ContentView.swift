@@ -49,14 +49,32 @@ struct ContentView: View {
     @State private var expandedBoredom: Bool = false
     @State private var borderOpacity: Double = 0.0
 
+    // Shared button shadow (top stats + bottom bored)
+    private let buttonShadowColor: Color = .black.opacity(1)
+    private let buttonShadowRadius: CGFloat = 4
+    private let buttonShadowX: CGFloat = 0
+    private let buttonShadowY: CGFloat = 2
+
     // Timers
     @State private var boredCountdownTimer: Timer? = nil
     @State private var boredAccumulationTimer: Timer? = nil
     @State private var lastAccumulationTick: Date? = nil
+    
 
-    // Transition timing
-    private let transitionDuration: TimeInterval = 1.2 // keep in sync with the .animation duration
-    private var transitionLeadTime: TimeInterval { transitionDuration } // start transition this many seconds before A ends
+    // MARK: - Animation tuning
+    // 1) Transition duration between videos
+    private let videoTransitionDuration: TimeInterval = 1 // keep in sync with the .animation duration
+
+    // 2) Transition duration when zzz icon changes to progress indicator
+    //    (This is the animation SwiftUI uses when `isExpandedForThisLayer` toggles.)
+    private let boredSymbolSwapDuration: TimeInterval = 0.24
+
+    // 3) Transition duration when pressing the zzz button and the label grows
+    // Spring used for the left label scale transition (make it obviously bouncy for QA)
+    private let boredLabelSpring: Animation = .interpolatingSpring(stiffness: 200, damping: 20)
+
+    // Used for the swipe-up trigger window before the video ends.
+    private var transitionLeadTime: TimeInterval { videoTransitionDuration }
 
     // Periodic observer so we can trigger the transition BEFORE the final frozen frame
     @State private var timeObserverToken: Any? = nil
@@ -93,17 +111,19 @@ struct ContentView: View {
             }
             .ignoresSafeArea()
 
-            // Persistent top-right stats icon (no action yet)
+            // Persistent top-right stats button (styled to match the bottom bored button)
             Button(action: { isStatsPresented = true }) {
-                Image(systemName: "chart.bar.xaxis")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(12)
-                    .background(Color.black.opacity(0.25))
-                    .clipShape(Capsule())
+                Image(systemName: "lines.measurement.horizontal.aligned.bottom", variableValue: 0.4)
+                    .font(.system(size: 24, weight: .regular))
+                    .foregroundStyle(.white, .white.opacity(0.6))
+                    .shadow(color: buttonShadowColor, radius: buttonShadowRadius, x: buttonShadowX, y: buttonShadowY)
             }
+            .frame(width: 48, height: 48)
+            .buttonStyle(.plain)
+            .disabled(isStatsPresented)
+            .allowsHitTesting(!isTransitioning && !isStatsPresented)
             .padding(.top, 18)
-            .padding(.trailing, 16)
+            .padding(.trailing, 12)
 
             // Removed persistent bottom-right "I'm bored" button per instructions
         }
@@ -173,67 +193,87 @@ struct ContentView: View {
                 .id(viewID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // Top gradient overlay for subtle contrast (mirrors bottom)
+            LinearGradient(
+                gradient: Gradient(colors: [Color.black.opacity(0.4), Color.clear]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 400)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
             // Bottom gradient overlay for subtle contrast
             LinearGradient(
-                gradient: Gradient(colors: [Color.black.opacity(0.35), Color.clear]),
+                gradient: Gradient(colors: [Color.black.opacity(0.4), Color.clear]),
                 startPoint: .bottom,
                 endPoint: .top
             )
-            .frame(height: 220)
-            .frame(maxWidth: .infinity, alignment: .bottom)
+            .frame(height: 400)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
             // Right-side bored control (aligned bottom)
             let filename = currentFilename(for: player)
             let instanceCount = (filename != nil) ? boredomStore.instanceCount(for: filename!) : 0
             let timeAccum = (filename != nil) ? boredomStore.getBoredomTime(for: filename!) : 0
             let countdownProgress = max(0.0, min(1.0, (5.0 - boredSkipTimerRemaining) / 5.0))
+            let isExpandedForThisLayer = isCurrent && expandedBoredom
 
-            VStack(spacing: 6) {
-                // Bored button container and progress border
-                Button(action: { if isCurrent { boredButtonTapped() } }) {
-                    VStack(spacing: 6) {
-                        Image(systemName: "zzz")
-                            .font(.system(size: 22, weight: .bold))
-                        Text("\(instanceCount)")
-                            .font(.system(size: 15, weight: .semibold))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.vertical, 12)
-                    .padding(.horizontal, 14)
-                    .frame(width: 72)
-                    .background(Color.black.opacity(0.45))
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(
-                        ZStack {
-                            // Always show a faint base border for visibility
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(Color.white.opacity(0.18), lineWidth: 1.5)
-                            // Progress border when countdown is active
-                            if isCurrent && boredSkipActive {
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .trim(from: 0, to: countdownProgress)
-                                    .stroke(Color.white.opacity(borderOpacity), style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                                    .animation(.linear(duration: 0.05), value: countdownProgress)
-                            }
+            HStack(spacing: 0) {
+                // LEFT: label container (hug-sized, not part of the button)
+                if isExpandedForThisLayer {
+                    Group {
+                        HStack(spacing: 6) {
+                            Text("Bored on this video for:")
+                            Text("\(formatBoredTime(timeAccum))")
                         }
-                    )
-                    .shadow(color: Color.black.opacity(0.6), radius: 8, x: 0, y: 3)
-                }
-                .disabled(!(isCurrent && !expandedBoredom && !isTransitioning && !isStatsPresented))
-                .allowsHitTesting(isCurrent && !expandedBoredom && !isTransitioning && !isStatsPresented)
-
-                // Expanded info when tapped (2s)
-                if isCurrent && expandedBoredom {
-                    Text("Bored on this video for: \(formatBoredTime(timeAccum))")
                         .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.9))
-                        .multilineTextAlignment(.trailing)
-                        .frame(maxWidth: 220, alignment: .trailing)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        // Auto-contrast against light/dark glass by inverting the pixels behind.
+                        .foregroundStyle(.white)
+                        .compositingGroup()
+                        .blendMode(.difference)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        // Native Liquid Glass
+                        .modifier(LiquidGlassIfAvailable(shape: RoundedRectangle(cornerRadius: 24, style: .continuous)))
+                        // Scale in from 0 -> 1 after pressing the button
+                        .transition(AnyTransition.scale(scale: 0.0, anchor: UnitPoint.trailing).combined(with: .opacity))
+                        .animation(boredLabelSpring, value: isExpandedForThisLayer)
+                    }
                 }
+
+                // RIGHT: main button (fixed size, transparent background)
+                Button(action: { if isCurrent { boredButtonTapped() } }) {
+                        VStack(spacing: 8) {
+                            ZStack {
+                                Image(systemName: "zzz")
+                                    .opacity(isExpandedForThisLayer ? 0 : 1)
+                                    .scaleEffect(isExpandedForThisLayer ? 0.9 : 1)
+
+                                Image(systemName: "progress.indicator", variableValue: countdownProgress)
+                                    .opacity(isExpandedForThisLayer ? 1 : 0)
+                                    .scaleEffect(isExpandedForThisLayer ? 1 : 1.1)
+                            }
+                            .animation(.easeInOut(duration: boredSymbolSwapDuration), value: isExpandedForThisLayer)
+                            .font(.system(size: 24, weight: .regular))
+                            .foregroundStyle(.white, .white.opacity(0.20))
+                            .contentTransition(.symbolEffect(.replace))
+                            .animation(.easeInOut(duration: boredSymbolSwapDuration), value: isExpandedForThisLayer)
+
+                            Text("\(instanceCount)")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .shadow(color: buttonShadowColor, radius: buttonShadowRadius, x: buttonShadowX, y: buttonShadowY)
+                    }
+                    .frame(width: 48, height: 48)
+                    .fixedSize()
+
+                .buttonStyle(.plain)
+                .disabled(!(isCurrent && !isTransitioning && !isStatsPresented))
+                .allowsHitTesting(isCurrent && !isTransitioning && !isStatsPresented)
             }
             .padding(.trailing, 12)
-            .padding(.bottom, 28)
+            .padding(.bottom, 96)
             .zIndex(5)
         }
     }
@@ -431,19 +471,24 @@ struct ContentView: View {
         stats.addBoredomInstance(for: filename)
         boredomStore.declareBoredomIfNeeded(for: filename)
 
-        // Expand UI for 2 seconds
-        expandedBoredom = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                expandedBoredom = false
-            }
+        // Expand UI
+        withAnimation(boredLabelSpring) {
+            expandedBoredom = true
         }
 
         // Start skip countdown once per playback
         if !boredSkipTriggeredThisPlay {
             boredSkipTriggeredThisPlay = true
             boredSkipActive = true
-            startBoredCountdown()
+
+            // Start AFTER the expand animation finishes.
+            // Starting the timer while the view is transitioning can cause the variable symbol
+            // to render at its default (full) and then never visually update.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                // Only start if we're still in the expanded state for the current layer.
+                guard expandedBoredom, boredSkipActive else { return }
+                startBoredCountdown(resetToFull: true)
+            }
         }
     }
 
@@ -492,12 +537,12 @@ struct ContentView: View {
 
         // Begin swipe-up transition (both layers move together via the SAME progress value)
         isTransitioning = true
-        withAnimation(.easeInOut(duration: transitionDuration)) {
+        withAnimation(.easeInOut(duration: videoTransitionDuration)) {
             transitionProgress = 1
         }
 
         // Swap players after the visual motion completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + transitionDuration) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + videoTransitionDuration) {
             // Capture the next preloaded player, but DO NOT assign it to `nextPlayer` yet.
             // While `isAnimatingTransition == true`, `nextPlayer` is the visible incoming layer.
             let upcomingNext = queue.peekPreparedNextPlayer()
@@ -583,9 +628,13 @@ struct ContentView: View {
     }
 
     // MARK: Countdown handling
-    private func startBoredCountdown() {
+    private func startBoredCountdown(resetToFull: Bool = false) {
         boredCountdownTimer?.invalidate()
-        boredSkipTimerRemaining = max(0, boredSkipTimerRemaining)
+        if resetToFull {
+            boredSkipTimerRemaining = 5.0
+        } else {
+            boredSkipTimerRemaining = max(0, boredSkipTimerRemaining)
+        }
         borderOpacity = 1.0
         boredCountdownTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
             tickCountdown()
@@ -595,11 +644,20 @@ struct ContentView: View {
 
     private func tickCountdown() {
         guard scenePhase == .active, boredSkipActive else { return }
-        boredSkipTimerRemaining -= 0.05
+        withAnimation(.linear(duration: 0.05)) {
+            boredSkipTimerRemaining = max(0, boredSkipTimerRemaining - 0.05)
+        }
         if boredSkipTimerRemaining <= 0 {
             boredSkipTimerRemaining = 0
+
+            // Collapse the label (scale back to 0) as the transition starts.
+            withAnimation(boredLabelSpring) {
+                expandedBoredom = false
+            }
+
             withAnimation(.easeOut(duration: 0.35)) { borderOpacity = 0.0 }
             boredCountdownTimer?.invalidate(); boredCountdownTimer = nil
+
             // Trigger transition to next video
             advanceToNextVideo(force: true)
         } else {
@@ -641,4 +699,19 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environmentObject(StatsStore())
+}
+
+// MARK: - LiquidGlassIfAvailable Modifier
+private struct LiquidGlassIfAvailable<S: Shape>: ViewModifier {
+    var shape: S
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular, in: shape)
+        } else {
+            // No glass available on older iOS targets.
+            content
+        }
+    }
 }
