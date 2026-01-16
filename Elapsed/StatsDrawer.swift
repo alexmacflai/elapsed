@@ -10,28 +10,19 @@ struct StatsDrawer: View {
     @EnvironmentObject private var stats: StatsStore
 
     var body: some View {
-        VStack(spacing: 16) {
-            Capsule()
-                .fill(Color.white.opacity(0.3))
-                .frame(width: 44, height: 5)
-                .padding(.top, 8)
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Stats")
+                .font(.headline)
+                .foregroundStyle(.primary)
 
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Stats")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .padding(.bottom, 4)
-
-                // Cards
-                StatCard(title: "Elapsed", value: formattedElapsed(stats.totalElapsedTime))
-                StatCard(title: "Plays", value: "\(stats.totalVideoPlays)")
-                StatCard(title: "Bored acknowledgements", value: "\(stats.boredomInstancesTotal)")
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
+            StatCard(title: "Elapsed", value: formattedElapsed(stats.totalElapsedTime))
+            StatCard(title: "Plays", value: "\(stats.totalVideoPlays)")
+            StatCard(title: "Bored acknowledgements", value: "\(stats.boredomInstancesTotal)")
         }
-        .frame(maxWidth: .infinity, alignment: .top)
-        .background(.black.opacity(0.9))
+        .padding(.top, 16)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     // MARK: - Formatting helpers
@@ -56,15 +47,13 @@ private struct StatCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.secondary)
                 Text(value)
                     .font(.title3).bold()
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
             }
             Spacer()
         }
-        .padding(12)
-        .background(Color.white.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.vertical, 6)
     }
 }
