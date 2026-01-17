@@ -8,9 +8,51 @@
 // Notes for assets: Add your .mp4 files to the app target, then update `videoFilenames`
 // in VideoQueue.swift.
 
+
 import SwiftUI
 import AVFoundation
 import Combine
+
+// Observes system media volume changes (hardware buttons, AirPods, etc.)
+final class SystemVolumeWatcher: ObservableObject {
+    @Published var volume: Float
+
+    private var observation: NSKeyValueObservation? = nil
+
+    init() {
+        let session = AVAudioSession.sharedInstance()
+        self.volume = session.outputVolume
+    }
+
+    func start() {
+        if observation != nil { return }
+
+        let session = AVAudioSession.sharedInstance()
+
+        // Keep this lightweight; we only need outputVolume updates.
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try session.setActive(true)
+        } catch {
+            return
+        }
+
+        volume = session.outputVolume
+
+        observation = session.observe(\.outputVolume, options: [.new]) { [weak self] _, change in
+            guard let self else { return }
+            guard let newVol = change.newValue else { return }
+            DispatchQueue.main.async {
+                self.volume = newVol
+            }
+        }
+    }
+
+    func stop() {
+        observation?.invalidate()
+        observation = nil
+    }
+}
 
 struct ContentView: View {
     // Observe app lifecycle to pause/resume playback
@@ -50,6 +92,7 @@ struct ContentView: View {
     @State private var expandedBoredom: Bool = false
     @State private var borderOpacity: Double = 0.0
 
+
     // Shared button shadow (top stats + bottom bored)
     private let buttonShadowColor: Color = .black.opacity(1)
     private let buttonShadowRadius: CGFloat = 4
@@ -68,20 +111,27 @@ struct ContentView: View {
 
     // User mute toggle state
     @State private var userMuted: Bool = false
-    // Mute HUD: hidden by default; appears on double-tap, then disappears after 1s.
-    @State private var muteHUDVisible: Bool = false
-    @State private var muteHUDShouldDisappear: Bool = false
-    @State private var muteHUDDrawOnActive: Bool = true
-    @State private var muteHUDDisappearWorkItem: DispatchWorkItem? = nil
-    @State private var muteHUDHideWorkItem: DispatchWorkItem? = nil
+    @StateObject private var systemVolume = SystemVolumeWatcher()
 
-    private var muteHUDSymbol: String {
-        userMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
-    }
+    // Top mute button: force a consistent drawOff -> drawOn swap in BOTH directions
+    @State private var muteButtonShowingMuted: Bool = false
+    @State private var muteButtonDrawOffMuted: Bool = false
+    @State private var muteButtonDrawOffUnmuted: Bool = false
+    @State private var muteButtonDrawOnMuted: Bool = false
+    @State private var muteButtonDrawOnUnmuted: Bool = false
+    @State private var muteButtonSwapWorkItem: DispatchWorkItem? = nil
+
+    // Prevent rapid re-taps from breaking the drawOff/drawOn sequence
+    @State private var muteTapCooldown: Bool = false
+
+
+
+    
 
     // MARK: - Animation tuning
     // 1) Transition duration between videos
     private let videoTransitionDuration: TimeInterval = 1 // keep in sync with the .animation duration
+
 
     // 2) Transition duration when zzz icon changes to progress indicator
     //    (This is the animation SwiftUI uses when `isExpandedForThisLayer` toggles.)
@@ -112,6 +162,14 @@ struct ContentView: View {
                 let p = max(0, min(1, transitionProgress))
 
                 ZStack(alignment: .top) {
+                    // Double tap anywhere on the video -> trigger bored
+                    Color.clear
+                        .frame(width: W, height: H)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) {
+                            boredButtonTapped()
+                        }
+
                     // Video A: y = 0 -> -H
                     transitioningLayer(player: currentPlayer, viewID: currentPlayerViewID, isCurrent: true)
                         .frame(width: W, height: H)
@@ -126,7 +184,6 @@ struct ContentView: View {
                 .frame(width: W, height: H)
                 .clipped()
                 .contentShape(Rectangle())
-                .onTapGesture(count: 2) { handleDoubleTap() }
                 .allowsHitTesting(!isStatsPresented && !isInfoPresented)
             }
             .ignoresSafeArea()
@@ -135,10 +192,15 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 // Stats (chart) button
                 Button(action: { isStatsPresented = true }) {
-                    Image(systemName: "lines.measurement.horizontal.aligned.bottom", variableValue: 0.4)
-                        .font(.system(size: 24, weight: .regular))
-                        .foregroundStyle(.white, .white.opacity(0.6))
-                        .shadow(color: buttonShadowColor, radius: buttonShadowRadius, x: buttonShadowX, y: buttonShadowY)
+                    ZStack {
+                        Image(systemName: "lines.measurement.horizontal.aligned.bottom", variableValue: 0.4)
+                            .font(.system(size: 24, weight: .regular))
+                            .foregroundStyle(.white, .white.opacity(0.6))
+                            .frame(width: 24, height: 24, alignment: .center)
+                    }
+                    .frame(width: 48, height: 48, alignment: .center)
+                    .contentShape(Rectangle())
+                    .shadow(color: buttonShadowColor, radius: buttonShadowRadius, x: buttonShadowX, y: buttonShadowY)
                 }
                 .frame(width: 48, height: 48)
                 .buttonStyle(.plain)
@@ -147,18 +209,64 @@ struct ContentView: View {
 
                 // Info button (same style)
                 Button(action: { isInfoPresented = true }) {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 24, weight: .regular))
-                        .foregroundStyle(.white, .white.opacity(0.6))
-                        .shadow(color: buttonShadowColor, radius: buttonShadowRadius, x: buttonShadowX, y: buttonShadowY)
+                    ZStack {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 24, weight: .regular))
+                            .foregroundStyle(.white, .white.opacity(0.5))
+                            .frame(width: 24, height: 24, alignment: .center)
+                    }
+                    .frame(width: 48, height: 48, alignment: .center)
+                    .contentShape(Rectangle())
+                    .shadow(color: buttonShadowColor, radius: buttonShadowRadius, x: buttonShadowX, y: buttonShadowY)
                 }
                 .frame(width: 48, height: 48)
                 .buttonStyle(.plain)
                 .disabled(isStatsPresented || isInfoPresented)
                 .allowsHitTesting(!isTransitioning && !isStatsPresented && !isInfoPresented)
+
+                // Mute / Unmute button (same style)
+                Button(action: {
+                    guard !muteTapCooldown else { return }
+                    muteTapCooldown = true
+
+                    userMuted.toggle()
+                    applyMuteState()
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        muteTapCooldown = false
+                    }
+                }) {
+                    ZStack {
+                        // Unmuted symbol
+                        Image(systemName: "speaker.wave.2")
+                            .font(.system(size: 24, weight: .regular))
+                            .foregroundStyle(.white, .white.opacity(0.4))
+                            .frame(width: 24, height: 24, alignment: .center)
+                            .opacity((!muteButtonShowingMuted || muteButtonDrawOffUnmuted) ? 1 : 0)
+                            .symbolEffect(.drawOff.byLayer, options: .speed(1), isActive: muteButtonDrawOffUnmuted)
+                            .symbolEffect(.drawOn.byLayer, options: .speed(1), isActive: muteButtonDrawOnUnmuted)
+
+                        // Muted symbol
+                        Image(systemName: "speaker.slash")
+                            .font(.system(size: 24, weight: .regular))
+                            .foregroundStyle(.white, .white.opacity(0.4))
+                            .frame(width: 24, height: 24, alignment: .center)
+                            .opacity((muteButtonShowingMuted || muteButtonDrawOffMuted) ? 1 : 0)
+                            .symbolEffect(.drawOff.byLayer, options: .speed(1), isActive: muteButtonDrawOffMuted)
+                            .symbolEffect(.drawOn.byLayer, options: .speed(1), isActive: muteButtonDrawOnMuted)
+                    }
+                    .frame(width: 48, height: 48, alignment: .center)
+                    .contentShape(Rectangle())
+                    .shadow(color: buttonShadowColor, radius: buttonShadowRadius, x: buttonShadowX, y: buttonShadowY)
+                }
+                .frame(width: 48, height: 48)
+                .buttonStyle(.plain)
+                .disabled(isStatsPresented || isInfoPresented || muteTapCooldown)
+                .allowsHitTesting(!isTransitioning && !isStatsPresented && !isInfoPresented && !muteTapCooldown)
             }
             .padding(.top, 18)
             .padding(.trailing, 12)
+
 
             // Removed persistent bottom-right "I'm bored" button per instructions
         }
@@ -169,20 +277,7 @@ struct ContentView: View {
                 errorView
             }
         }
-        .overlay(alignment: .center) {
-            if muteHUDVisible {
-                Image(systemName: muteHUDSymbol)
-                    .font(.system(size: 64, weight: .regular))
-                    .foregroundStyle(.white)
-                    .opacity(0.6)
-                    .shadow(color: .black.opacity(1), radius: 16, x: 0, y: 2)
-                    // SF Symbols-only: drawOn effect on each double tap.
-                    .symbolEffect(.drawOn.byLayer, options: .speed(1), isActive: muteHUDDrawOnActive)
-                    // SF Symbols-only: disappear 1s after each double tap.
-                    .symbolEffect(.disappear, options: .speed(0.5), isActive: muteHUDShouldDisappear)
-                    .allowsHitTesting(false)
-            }
-        }
+        // mute HUD overlay removed
         .sheet(isPresented: $isStatsPresented) {
             NavigationStack {
                 StatsDrawer()
@@ -255,12 +350,25 @@ struct ContentView: View {
         .onAppear {
             prepareInitialPlayers()
             installPreEndObserverIfNeeded()
+            // Start observing system volume so volume-up can auto-unmute.
+            systemVolume.start()
+            muteButtonShowingMuted = userMuted
             if scenePhase == .active {
                 stats.startRealElapsedTimer()
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhase(newPhase)
+        }
+        .onChange(of: systemVolume.volume) { oldValue, newValue in
+            // Auto-unmute ONLY on volume UP.
+            if userMuted && newValue > oldValue {
+                userMuted = false
+                applyMuteState()
+            }
+        }
+        .onChange(of: userMuted) { _, newValue in
+            triggerMuteButtonSwap(toMuted: newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime).receive(on: RunLoop.main)) { notif in
             // Only advance when the CURRENT player's item ends.
@@ -275,10 +383,8 @@ struct ContentView: View {
             boredCountdownTimer?.invalidate(); boredCountdownTimer = nil
             boredAccumulationTimer?.invalidate(); boredAccumulationTimer = nil
             volumeFadeTimer?.invalidate(); volumeFadeTimer = nil
+            systemVolume.stop()
         }
-        // Optional debug advance: enable for testing only
-        // .contentShape(Rectangle())
-        // .onTapGesture { advanceToNextVideo() }
     }
 
     // MARK: - Transitioning Layer
@@ -289,6 +395,7 @@ struct ContentView: View {
             PlayerView(player: player)
                 .id(viewID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
 
             // Top gradient overlay for subtle contrast (mirrors bottom)
             LinearGradient(
@@ -298,6 +405,7 @@ struct ContentView: View {
             )
             .frame(height: 400)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .allowsHitTesting(false)
 
             // Bottom gradient overlay for subtle contrast
             LinearGradient(
@@ -307,6 +415,7 @@ struct ContentView: View {
             )
             .frame(height: 400)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .allowsHitTesting(false)
 
             // Right-side bored control (aligned bottom)
             let filename = currentFilename(for: player)
@@ -317,25 +426,24 @@ struct ContentView: View {
 
             HStack(spacing: 0) {
                 // LEFT: label container (hug-sized, not part of the button)
-                if isExpandedForThisLayer {
-                    Group {
-                        HStack(spacing: 6) {
-                            Text("Bored on this video for:")
-                            Text("\(formatBoredTime(timeAccum))")
-                        }
-                        .font(.footnote)
-                        // Auto-contrast against light/dark glass by inverting the pixels behind.
-                        .foregroundStyle(.white)
-                        .compositingGroup()
-                        .blendMode(.difference)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        // Native Liquid Glass
-                        .modifier(LiquidGlassIfAvailable(shape: RoundedRectangle(cornerRadius: 24, style: .continuous)))
-                        // Removed .transition(.opacity)
-                        .animation(boredLabelSpring, value: isExpandedForThisLayer)
-                    }
+                HStack(spacing: 6) {
+                    Text("Bored on this video for:")
+                    Text("\(formatBoredTime(timeAccum))")
                 }
+                .font(.footnote)
+                // Auto-contrast against light/dark glass by inverting the pixels behind.
+                .foregroundStyle(.white)
+                .compositingGroup()
+                .blendMode(.difference)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                // Native Liquid Glass
+                .modifier(LiquidGlassIfAvailable(shape: RoundedRectangle(cornerRadius: 24, style: .continuous)))
+                // Spring scale: 0 -> 1
+                .scaleEffect(isExpandedForThisLayer ? 1 : 0, anchor: .trailing)
+                .opacity(isExpandedForThisLayer ? 1 : 0)
+                .allowsHitTesting(false)
+                .animation(boredLabelSpring, value: isExpandedForThisLayer)
 
                 // RIGHT: main button (fixed size, transparent background)
                 Button(action: { if isCurrent { boredButtonTapped() } }) {
@@ -354,6 +462,7 @@ struct ContentView: View {
                             .foregroundStyle(.white, .white.opacity(0.20))
                             .contentTransition(.symbolEffect(.replace))
                             .animation(.easeInOut(duration: boredSymbolSwapDuration), value: isExpandedForThisLayer)
+                            .frame(width: 24, height: 24, alignment: .center)
 
                             Text("\(instanceCount)")
                                 .font(.system(size: 12, weight: .semibold))
@@ -368,6 +477,7 @@ struct ContentView: View {
                 .disabled(!(isCurrent && !isTransitioning && !isStatsPresented))
                 .allowsHitTesting(isCurrent && !isTransitioning && !isStatsPresented)
             }
+            // .animation(boredLabelSpring, value: isExpandedForThisLayer) // REMOVED PER INSTRUCTIONS
             .padding(.trailing, 12)
             .padding(.bottom, 96)
             .zIndex(5)
@@ -448,52 +558,57 @@ struct ContentView: View {
         nextPlayer?.isMuted = userMuted
     }
 
-    private func handleDoubleTap() {
-        userMuted.toggle()
-        applyMuteState()
+    private func triggerMuteButtonSwap(toMuted: Bool) {
+        // Cancel any pending swap.
+        muteButtonSwapWorkItem?.cancel()
 
-        // Show HUD immediately.
-        muteHUDVisible = true
-        muteHUDShouldDisappear = false
-
-        // Ensure the symbol starts in the "undrawn" state WITHOUT animating.
-        var txn = Transaction()
-        txn.disablesAnimations = true
-        withTransaction(txn) {
-            muteHUDDrawOnActive = true
+        // Ensure our "currently showing" state is initialized.
+        // (On first run, it will be set in onAppear too.)
+        let fromMuted = muteButtonShowingMuted
+        if fromMuted == toMuted {
+            return
         }
 
-        // Animate to the drawn state after the HUD is in the view tree.
-        DispatchQueue.main.async {
-            muteHUDDrawOnActive = false
+        // 1) Draw OFF the outgoing symbol.
+        if fromMuted {
+            muteButtonDrawOffMuted = true
+        } else {
+            muteButtonDrawOffUnmuted = true
         }
 
-        // Cancel any pending scheduled effects from previous taps.
-        muteHUDDisappearWorkItem?.cancel()
-        muteHUDHideWorkItem?.cancel()
+        // 2) After a short delay, switch the visible symbol and draw ON the incoming one.
+        let item = DispatchWorkItem {
+            // Stop the outgoing drawOff and hide the outgoing symbol (opacity logic will handle it).
+            muteButtonDrawOffMuted = false
+            muteButtonDrawOffUnmuted = false
 
-        // 1s after tap: play the SF Symbols disappear effect.
-        let disappearItem = DispatchWorkItem {
-            muteHUDShouldDisappear = true
+            // Flip the shown symbol.
+            muteButtonShowingMuted = toMuted
 
-            // After the disappear effect has time to play, remove the icon entirely.
-            let hideItem = DispatchWorkItem {
-                muteHUDVisible = false
-                muteHUDShouldDisappear = false
-
-                // Reset to "undrawn" without animating.
-                var txn = Transaction()
-                txn.disablesAnimations = true
-                withTransaction(txn) {
-                    muteHUDDrawOnActive = true
+            // Trigger drawOn for the incoming symbol using the same "true (undrawn) -> false (draw)" pattern.
+            var txn = Transaction()
+            txn.disablesAnimations = true
+            withTransaction(txn) {
+                if toMuted {
+                    muteButtonDrawOnMuted = true
+                } else {
+                    muteButtonDrawOnUnmuted = true
                 }
             }
-            muteHUDHideWorkItem = hideItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: hideItem)
+
+            DispatchQueue.main.async {
+                if toMuted {
+                    muteButtonDrawOnMuted = false
+                } else {
+                    muteButtonDrawOnUnmuted = false
+                }
+            }
         }
-        muteHUDDisappearWorkItem = disappearItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: disappearItem)
+
+        muteButtonSwapWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: item)
     }
+        
 
     // MARK: - Startup readiness check
     private func startReadyCheckTimer() {
@@ -568,6 +683,7 @@ struct ContentView: View {
     private func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            systemVolume.start()
             currentPlayer?.play()
             applyMuteState()
             stats.startRealElapsedTimer()
@@ -580,6 +696,7 @@ struct ContentView: View {
             break
 
         case .background:
+            systemVolume.stop()
             volumeFadeTimer?.invalidate(); volumeFadeTimer = nil
             currentPlayer?.pause()
             stats.flushNow()
@@ -740,40 +857,68 @@ struct ContentView: View {
         // Swap players after the visual motion completes
         DispatchQueue.main.asyncAfter(deadline: .now() + videoTransitionDuration) {
             // Capture the next preloaded player, but DO NOT assign it to `nextPlayer` yet.
-            // While `isAnimatingTransition == true`, `nextPlayer` is the visible incoming layer.
+            // While `transitionProgress == 1`, `nextPlayer` is the visible incoming layer.
             let upcomingNext = queue.peekPreparedNextPlayer()
+            let outgoingPlayer = currentPlayer
 
-            // Do the player swap without any implicit SwiftUI animations.
-            var txn = Transaction()
-            txn.disablesAnimations = true
-            withTransaction(txn) {
-                // Pause old player to avoid background playback
-                currentPlayer?.volume = 0.0
-                currentPlayer?.pause()
+            // Phase 1 (same frame): promote B -> A, but DO NOT snap geometry back yet.
+            // This prevents a single frame where A snaps back while still showing the old player.
+            var txn1 = Transaction()
+            txn1.disablesAnimations = true
+            withTransaction(txn1) {
+                // IMPORTANT: reset bored UI BEFORE promoting B -> A.
+                // Otherwise the next video can briefly render the expanded label/progress.
+                boredCountdownTimer?.invalidate(); boredCountdownTimer = nil
+                boredSkipActive = false
+                boredSkipTimerRemaining = 5.0
+                boredSkipTriggeredThisPlay = false
+                expandedBoredom = false
+                borderOpacity = 0.0
 
-                // Promote the incoming player to become current
                 currentPlayer = newPlayer
-                // Keep the incoming layer identity so the swap doesn't flash.
                 currentPlayerViewID = nextPlayerViewID
 
-                installPreEndObserverIfNeeded()
-
-                // IMPORTANT: do NOT seek here. B is already playing during the transition.
+                // Keep audio/playback correct.
                 currentPlayer?.isMuted = userMuted
                 currentPlayer?.volume = 1.0
                 if scenePhase == .active {
                     currentPlayer?.play()
-                    newPlaybackStarted()
                 }
-
-                // Reset instantly for the next cycle (no animation).
-                transitionProgress = 0
-                isTransitioning = false
             }
 
-            // Now that the transition has ended (next layer is off-screen), refresh the preloaded next.
-            nextPlayer = upcomingNext
-            nextPlayerViewID = UUID()
+            // Phase 2 (next runloop): now snap back to idle geometry and refresh the off-screen layer.
+            DispatchQueue.main.async {
+                var txn2 = Transaction()
+                txn2.disablesAnimations = true
+                withTransaction(txn2) {
+                    // Snap back to idle.
+                    transitionProgress = 0
+                    isTransitioning = false
+
+                    // Clear the off-screen layer before restoring the real preloaded next.
+                    nextPlayer = nil
+                    nextPlayerViewID = UUID()
+
+                    installPreEndObserverIfNeeded()
+                }
+
+                // Pause the outgoing player after the swap is fully committed.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    outgoingPlayer?.volume = 0.0
+                    outgoingPlayer?.pause()
+                }
+
+                // Restore the preloaded next (off-screen).
+                nextPlayer = upcomingNext
+                nextPlayer?.isMuted = userMuted
+                nextPlayer?.volume = 0.0
+                nextPlayerViewID = UUID()
+
+                // Now that playback has advanced, start per-playback stats.
+                if scenePhase == .active {
+                    newPlaybackStarted()
+                }
+            }
         }
     }
 
