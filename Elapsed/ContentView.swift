@@ -278,6 +278,7 @@ struct ContentView: View {
 
             // Removed persistent bottom-right "I'm bored" button per instructions
         }
+        
         .overlay {
             if showInitialLoading {
                 loadingView
