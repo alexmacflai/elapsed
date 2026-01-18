@@ -22,11 +22,11 @@ struct StatsDrawer: View {
                 HStack(spacing: 8) {
                     StatTile(title: "Elapsed", value: formattedElapsed(realSec))
                     StatTile(title: "Time bored", value: formattedElapsed(elapsedSec))
-                    StatTile(title: "Plays", value: "\(stats.totalVideoPlays)")
+                    StatTile(title: "Plays", value: formattedPlays(stats.totalVideoPlays))
 //                StatTile(title: "Bored acknowledgements", value: "\(stats.boredomInstancesTotal)")
                 }
 
-                GraphTile(title: "Dopamine-free time", played: max(realSec - elapsedSec, 0), bored: elapsedSec)
+                GraphTile(title: "Dopamine-free time", elapsed: realSec, bored: elapsedSec)
                 
                 GraphLineTile(title: "Bored cries over time", times: stats.boredAcknowledgementTimes, totalTime: realSec)
             }
@@ -44,15 +44,50 @@ struct StatsDrawer: View {
 
         let s = total % 60
         let m = (total / 60) % 60
-        let h = total / 3600
+        let hTotal = total / 3600
+        let d = hTotal / 24
+        let h = hTotal % 24
 
-        if h > 0 {
-            return "\(h)h \(m)m"
+        if d > 0 {
+            return "\(d)d \(h)h"
+        } else if hTotal > 0 {
+            return "\(hTotal)h \(m)m"
         } else if m > 0 {
             return "\(m)m \(s)s"
         } else {
             return "\(s)s"
         }
+    }
+
+    private func formattedPlays(_ plays: Int) -> String {
+        let n = max(0, plays)
+
+        // Millions: 1_000_000 or more -> "3M 15K"
+        if n >= 1_000_000 {
+            let millions = n / 1_000_000
+            let thousands = (n % 1_000_000) / 1_000
+
+            if thousands > 0 {
+                return "\(millions)M \(thousands)K"
+            } else {
+                return "\(millions)M"
+            }
+        }
+
+        // Thousands (and below): group with thin spaces -> "35 020"
+        let thinSpace = "\u{2009}"
+        let s = String(n)
+        var out: [Character] = []
+        out.reserveCapacity(s.count + s.count / 3)
+
+        for (idx, ch) in s.reversed().enumerated() {
+            if idx > 0 && idx % 3 == 0 {
+                out.append(Character(thinSpace))
+            }
+            out.append(ch)
+        }
+
+        return String(out.reversed())
     }
 }
 
@@ -79,15 +114,15 @@ private struct StatTile: View {
 
 private struct GraphTile: View {
     let title: String
-    let played: Double
+    let elapsed: Double
     let bored: Double
 
     var body: some View {
-        let playedValue = max(0, played)
+        let elapsedValue = max(0, elapsed)
         let boredValue = max(0, bored)
 
         let segments: [(label: String, value: Double)] = [
-            ("Played", playedValue),
+            ("Elapsed", elapsedValue),
             ("Bored", boredValue)
         ]
 
@@ -103,6 +138,10 @@ private struct GraphTile: View {
                 )
                 .foregroundStyle(by: .value("Type", segment.label))
             }
+            .chartForegroundStyleScale([
+                "Elapsed": Color.purple.opacity(0.3),
+                "Bored": Color.purple
+            ])
             .chartLegend(.visible)
             .frame(height: 180)
         }
@@ -143,14 +182,14 @@ private struct GraphLineTile: View {
                             x: .value("Time", p.t),
                             y: .value("Count", p.c)
                         )
-                        .foregroundStyle(Gradient(colors: [Color.blue.opacity(0.25), Color.blue.opacity(0.05)]))
+                        .foregroundStyle(Gradient(colors: [Color.purple.opacity(0.25), Color.purple.opacity(0.05)]))
                         .interpolationMethod(.catmullRom)
 
                         LineMark(
                             x: .value("Time", p.t),
                             y: .value("Count", p.c)
                         )
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(.purple)
                         .lineStyle(StrokeStyle(lineWidth: 2))
                         .interpolationMethod(.catmullRom)
                     }
