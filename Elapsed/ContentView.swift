@@ -123,6 +123,14 @@ struct ContentView: View {
 
     // Prevent rapid re-taps from breaking the drawOff/drawOn sequence
     @State private var muteTapCooldown: Bool = false
+    
+    // Bored button symbol swap: drawOff/drawOn between zzz <-> progress.indicator
+    @State private var boredButtonShowingProgress: Bool = false
+    @State private var boredButtonDrawOffZzz: Bool = false
+    @State private var boredButtonDrawOnZzz: Bool = false
+    @State private var boredButtonDrawOffProgress: Bool = false
+    @State private var boredButtonDrawOnProgress: Bool = false
+    @State private var boredButtonSwapWorkItem: DispatchWorkItem? = nil
 
 
 
@@ -212,7 +220,7 @@ struct ContentView: View {
                     ZStack {
                         Image(systemName: "info.circle")
                             .font(.system(size: 24, weight: .regular))
-                            .foregroundStyle(.white, .white.opacity(0.5))
+                            .foregroundStyle(.white, .white.opacity(0.4))
                             .frame(width: 24, height: 24, alignment: .center)
                     }
                     .frame(width: 48, height: 48, alignment: .center)
@@ -240,7 +248,7 @@ struct ContentView: View {
                         // Unmuted symbol
                         Image(systemName: "speaker.wave.2")
                             .font(.system(size: 24, weight: .regular))
-                            .foregroundStyle(.white, .white.opacity(0.4))
+                            .foregroundStyle(.white, .white.opacity(0.5))
                             .frame(width: 24, height: 24, alignment: .center)
                             .opacity((!muteButtonShowingMuted || muteButtonDrawOffUnmuted) ? 1 : 0)
                             .symbolEffect(.drawOff.byLayer, options: .speed(1), isActive: muteButtonDrawOffUnmuted)
@@ -249,7 +257,7 @@ struct ContentView: View {
                         // Muted symbol
                         Image(systemName: "speaker.slash")
                             .font(.system(size: 24, weight: .regular))
-                            .foregroundStyle(.white, .white.opacity(0.4))
+                            .foregroundStyle(.white, .white.opacity(0.5))
                             .frame(width: 24, height: 24, alignment: .center)
                             .opacity((muteButtonShowingMuted || muteButtonDrawOffMuted) ? 1 : 0)
                             .symbolEffect(.drawOff.byLayer, options: .speed(1), isActive: muteButtonDrawOffMuted)
@@ -303,7 +311,7 @@ struct ContentView: View {
         .sheet(isPresented: $isInfoPresented) {
             NavigationStack {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 16) {
                         Text("About Elapsed")
                             .font(.title2).bold()
 
@@ -356,6 +364,7 @@ struct ContentView: View {
             if scenePhase == .active {
                 stats.startRealElapsedTimer()
             }
+            boredButtonShowingProgress = expandedBoredom
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhase(newPhase)
@@ -369,6 +378,24 @@ struct ContentView: View {
         }
         .onChange(of: userMuted) { _, newValue in
             triggerMuteButtonSwap(toMuted: newValue)
+        }
+        .onChange(of: expandedBoredom) { _, newValue in
+            // When we collapse boredom as part of a video transition reset,
+            // don't re-run drawOn for zzz. Just snap state.
+            if isTransitioning {
+                boredButtonSwapWorkItem?.cancel()
+                boredButtonSwapWorkItem = nil
+
+                boredButtonDrawOffZzz = false
+                boredButtonDrawOnZzz = false
+                boredButtonDrawOffProgress = false
+                boredButtonDrawOnProgress = false
+
+                boredButtonShowingProgress = newValue
+                return
+            }
+
+            triggerBoredButtonSwap(toProgress: newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime).receive(on: RunLoop.main)) { notif in
             // Only advance when the CURRENT player's item ends.
@@ -399,17 +426,17 @@ struct ContentView: View {
 
             // Top gradient overlay for subtle contrast (mirrors bottom)
             LinearGradient(
-                gradient: Gradient(colors: [Color.black.opacity(0.4), Color.clear]),
+                gradient: Gradient(colors: [Color.black.opacity(0.5), Color.clear]),
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: 400)
+            .frame(height: 440)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .allowsHitTesting(false)
 
             // Bottom gradient overlay for subtle contrast
             LinearGradient(
-                gradient: Gradient(colors: [Color.black.opacity(0.4), Color.clear]),
+                gradient: Gradient(colors: [Color.black.opacity(0.5), Color.clear]),
                 startPoint: .bottom,
                 endPoint: .top
             )
@@ -449,19 +476,22 @@ struct ContentView: View {
                 Button(action: { if isCurrent { boredButtonTapped() } }) {
                         VStack(spacing: 8) {
                             ZStack {
+                                // ZZZ symbol
                                 Image(systemName: "zzz")
-                                    .opacity(isExpandedForThisLayer ? 0 : 1)
-                                    .scaleEffect(isExpandedForThisLayer ? 0.9 : 1)
+                                    .opacity(((!isExpandedForThisLayer) || boredButtonDrawOffZzz) ? 1 : 0)
+                                    .symbolEffect(.drawOff.byLayer, options: .speed(1), isActive: boredButtonDrawOffZzz)
+                                    .symbolEffect(.drawOn.byLayer, options: .speed(1), isActive: boredButtonDrawOnZzz)
 
-                                Image(systemName: "progress.indicator", variableValue: countdownProgress)
-                                    .opacity(isExpandedForThisLayer ? 1 : 0)
-                                    .scaleEffect(isExpandedForThisLayer ? 1 : 1.1)
+                                // Progress symbol (variable symbol)
+                                Image(systemName: "slowmo", variableValue: countdownProgress)
+                                    .opacity((isExpandedForThisLayer || boredButtonDrawOffProgress) ? 1 : 0)
+                                    .symbolEffect(.drawOff.byLayer, options: .speed(1), isActive: boredButtonDrawOffProgress)
+                                    .symbolEffect(.drawOn.byLayer, options: .speed(1), isActive: boredButtonDrawOnProgress)
                             }
-                            .animation(.easeInOut(duration: boredSymbolSwapDuration), value: isExpandedForThisLayer)
+
                             .font(.system(size: 24, weight: .regular))
                             .foregroundStyle(.white, .white.opacity(0.20))
-                            .contentTransition(.symbolEffect(.replace))
-                            .animation(.easeInOut(duration: boredSymbolSwapDuration), value: isExpandedForThisLayer)
+
                             .frame(width: 24, height: 24, alignment: .center)
 
                             Text("\(instanceCount)")
@@ -606,6 +636,49 @@ struct ContentView: View {
         }
 
         muteButtonSwapWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: item)
+    }
+    
+    private func triggerBoredButtonSwap(toProgress: Bool) {
+        boredButtonSwapWorkItem?.cancel()
+
+        let fromProgress = boredButtonShowingProgress
+        if fromProgress == toProgress { return }
+
+        // draw OFF outgoing
+        if fromProgress {
+            boredButtonDrawOffProgress = true
+        } else {
+            boredButtonDrawOffZzz = true
+        }
+
+        let item = DispatchWorkItem {
+            boredButtonDrawOffZzz = false
+            boredButtonDrawOffProgress = false
+
+            boredButtonShowingProgress = toProgress
+
+            // draw ON incoming (true -> false trick)
+            var txn = Transaction()
+            txn.disablesAnimations = true
+            withTransaction(txn) {
+                if toProgress {
+                    boredButtonDrawOnProgress = true
+                } else {
+                    boredButtonDrawOnZzz = true
+                }
+            }
+
+            DispatchQueue.main.async {
+                if toProgress {
+                    boredButtonDrawOnProgress = false
+                } else {
+                    boredButtonDrawOnZzz = false
+                }
+            }
+        }
+
+        boredButtonSwapWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: item)
     }
         
@@ -847,6 +920,14 @@ struct ContentView: View {
         currentPlayer?.isMuted = userMuted
         currentPlayer?.volume = 1.0
 
+        // IMPORTANT: cancel any in-flight bored icon drawOff/drawOn so it can't bleed into the next video.
+        boredButtonSwapWorkItem?.cancel()
+        boredButtonSwapWorkItem = nil
+        boredButtonDrawOffZzz = false
+        boredButtonDrawOnZzz = false
+        boredButtonDrawOffProgress = false
+        boredButtonDrawOnProgress = false
+        boredButtonShowingProgress = false
         // Begin swipe-up transition (both layers move together via the SAME progress value)
         startCrossfade(from: currentPlayer, to: nextPlayer, duration: videoTransitionDuration)
         isTransitioning = true
