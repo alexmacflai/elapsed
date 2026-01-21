@@ -28,7 +28,7 @@ struct StatsDrawer: View {
 
                 GraphTile(title: "Dopamine-free time", elapsed: realSec, bored: elapsedSec)
                 
-                GraphLineTile(title: "Bored cries over time", times: stats.boredAcknowledgementTimes, totalTime: realSec)
+//                GraphLineTile(title: "Bored cries over time", times: stats.boredAcknowledgementTimes, totalTime: realSec)
             }
         }
         .padding(.top, 0)
@@ -154,70 +154,70 @@ private struct GraphTile: View {
     }
 }
 
-private struct GraphLineTile: View {
-    let title: String
-    let times: [TimeInterval]
-    let totalTime: TimeInterval
-    var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Text(title)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            if times.isEmpty {
-                Text("No data yet")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 160, alignment: .center)
-            } else {
-                let sorted = times.sorted()
-                let points: [(t: Double, c: Int)] = [(0.0, 0)] + sorted.enumerated().map { (idx, t) in (t, idx + 1) }
-                let useHours = totalTime >= 3600
-                let unit: Double = useHours ? 3600 : 60
-
-                Chart {
-                    ForEach(points.indices, id: \.self) { idx in
-                        let p = points[idx]
-                        AreaMark(
-                            x: .value("Time", p.t),
-                            y: .value("Count", p.c)
-                        )
-                        .foregroundStyle(Gradient(colors: [Color.purple.opacity(0.25), Color.purple.opacity(0.05)]))
-                        .interpolationMethod(.catmullRom)
-
-                        LineMark(
-                            x: .value("Time", p.t),
-                            y: .value("Count", p.c)
-                        )
-                        .foregroundStyle(.purple)
-                        .lineStyle(StrokeStyle(lineWidth: 2))
-                        .interpolationMethod(.catmullRom)
-                    }
-                }
-                .chartLegend(.hidden)
-                .chartXAxis {
-                    AxisMarks(position: .bottom, values: .automatic(desiredCount: 6)) { value in
-                        AxisGridLine()
-                        AxisTick()
-                        if let seconds = value.as(Double.self) {
-                            let v = seconds / unit
-                            let label = useHours
-                                ? String(format: v < 10 ? "%.1fh" : "%.0fh", v)
-                                : String(format: v < 10 ? "%.1fm" : "%.0fm", v)
-                            AxisValueLabel { Text(label) }
-                        }
-                    }
-                }
-                .chartXScale(domain: 0...(max(totalTime, times.max() ?? 0)))
-                .chartYAxis { AxisMarks(position: .leading) }
-                .frame(height: 180)
-            }
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.thinMaterial)
-        )
-    }
-}
+//private struct GraphLineTile: View {
+//    let title: String
+//    let times: [TimeInterval]
+//    let totalTime: TimeInterval
+//    var body: some View {
+//        VStack(alignment: .leading, spacing: 24) {
+//            Text(title)
+//                .font(.subheadline)
+//                .foregroundStyle(.secondary)
+//
+//            if times.isEmpty {
+//                Text("No data yet")
+//                    .font(.footnote)
+//                    .foregroundStyle(.secondary)
+//                    .frame(maxWidth: .infinity, minHeight: 160, alignment: .center)
+//            } else {
+//                let sorted = times.sorted()
+//                let points: [(t: Double, c: Int)] = [(0.0, 0)] + sorted.enumerated().map { (idx, t) in (t, idx + 1) }
+//                let useHours = totalTime >= 3600
+//                let unit: Double = useHours ? 3600 : 60
+//
+//                Chart {
+//                    ForEach(points.indices, id: \.self) { idx in
+//                        let p = points[idx]
+//                        AreaMark(
+//                            x: .value("Time", p.t),
+//                            y: .value("Count", p.c)
+//                        )
+//                        .foregroundStyle(Gradient(colors: [Color.purple.opacity(0.25), Color.purple.opacity(0.05)]))
+//                        .interpolationMethod(.catmullRom)
+//
+//                        LineMark(
+//                            x: .value("Time", p.t),
+//                            y: .value("Count", p.c)
+//                        )
+//                        .foregroundStyle(.purple)
+//                        .lineStyle(StrokeStyle(lineWidth: 2))
+//                        .interpolationMethod(.catmullRom)
+//                    }
+//                }
+//                .chartLegend(.hidden)
+//                .chartXAxis {
+//                    AxisMarks(position: .bottom, values: .automatic(desiredCount: 6)) { value in
+//                        AxisGridLine()
+//                        AxisTick()
+//                        if let seconds = value.as(Double.self) {
+//                            let v = seconds / unit
+//                            let label = useHours
+//                                ? String(format: v < 10 ? "%.1fh" : "%.0fh", v)
+//                                : String(format: v < 10 ? "%.1fm" : "%.0fm", v)
+//                            AxisValueLabel { Text(label) }
+//                        }
+//                    }
+//                }
+//                .chartXScale(domain: 0...(max(totalTime, times.max() ?? 0)))
+//                .chartYAxis { AxisMarks(position: .leading) }
+//                .frame(height: 180)
+//            }
+//        }
+//        .padding()
+//        .frame(maxWidth: .infinity, alignment: .topLeading)
+//        .background(
+//            RoundedRectangle(cornerRadius: 12, style: .continuous)
+//                .fill(.thinMaterial)
+//        )
+//    }
+//}

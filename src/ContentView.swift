@@ -311,51 +311,25 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isInfoPresented) {
             NavigationStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("About Elapsed")
-                            .font(.title2).bold()
-
-                        Text("A calm, continuous loop of your videos. Elapsed helps you unwind, focus, or simply enjoy motion.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("What is Elapsed?")
-                                .font(.headline)
-                            Text("Elapsed plays your videos back-to-back with gentle transitions. It tracks how often you skip and how long you feel bored so you can discover what truly keeps you engaged.")
-
-                            Text("How it works")
-                                .font(.headline)
-                            Text("• Shuffles and preloads your videos for smooth playback.\n• Transitions early to avoid frozen frames.\n• Lets you mark boredom and auto-skip after a short countdown.\n• Summarizes your viewing stats in the drawer.")
-
-                            Text("Privacy")
-                                .font(.headline)
-                            Text("All data stays on your device. We never upload your media or stats anywhere.")
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                }
-                .navigationTitle("About Elapsed")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            isInfoPresented = false
-                        } label: {
-                            Image(systemName: "xmark")
+                AboutView()
+                    .navigationTitle("About Elapsed")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                isInfoPresented = false
+                            } label: {
+                                Image(systemName: "xmark")
+                            }
                         }
                     }
-                }
             }
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-            .presentationContentInteraction(.scrolls)
-            .presentationCornerRadius(28)
-            .preferredColorScheme(.dark)
         }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .presentationContentInteraction(.scrolls)
+        .presentationCornerRadius(28)
+        .preferredColorScheme(.dark)
         .onAppear {
             prepareInitialPlayers()
             installPreEndObserverIfNeeded()

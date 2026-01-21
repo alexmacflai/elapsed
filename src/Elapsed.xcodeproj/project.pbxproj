@@ -18,6 +18,9 @@
 		351120322F1D451400E57408 /* appIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 351120312F1D451400E57408 /* appIcon.icon */; };
 		352A3E812F193CC90068DBFF /* BoredomStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 352A3E802F193CC90068DBFF /* BoredomStore.swift */; };
 		3533BB6C2F1D1F140083AA5B /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 3533BB6B2F1D1F140083AA5B /* LaunchScreen.storyboard */; };
+		356129D22F2141AF00DC0EB7 /* AboutContent.md in Sources */ = {isa = PBXBuildFile; fileRef = 356129D12F2141AC00DC0EB7 /* AboutContent.md */; };
+		356129D42F2141D100DC0EB7 /* About.swift in Sources */ = {isa = PBXBuildFile; fileRef = 356129D32F2141CF00DC0EB7 /* About.swift */; };
+		356129D52F21475600DC0EB7 /* AboutContent.md in Resources */ = {isa = PBXBuildFile; fileRef = 356129D12F2141AC00DC0EB7 /* AboutContent.md */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +37,8 @@
 		352A3E802F193CC90068DBFF /* BoredomStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoredomStore.swift; sourceTree = "<group>"; };
 		3533BB6B2F1D1F140083AA5B /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		3533BB6D2F1D25920083AA5B /* Elapsed-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Elapsed-Info.plist"; sourceTree = "<group>"; };
+		356129D12F2141AC00DC0EB7 /* AboutContent.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = AboutContent.md; sourceTree = "<group>"; };
+		356129D32F2141CF00DC0EB7 /* About.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = About.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -67,6 +72,8 @@
 				35091A802F18F59C00C18528 /* ElapsedApp.swift */,
 				35091A8B2F19099900C18528 /* PlayerView.swift */,
 				35091A8D2F19099C00C18528 /* ContentView.swift */,
+				356129D12F2141AC00DC0EB7 /* AboutContent.md */,
+				356129D32F2141CF00DC0EB7 /* About.swift */,
 				35091A8F2F1909A100C18528 /* VideoQueue.swift */,
 				35091A912F190C1600C18528 /* Persistence.swift */,
 				35091A932F190C1A00C18528 /* StatsDrawer.swift */,
@@ -147,6 +154,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				356129D52F21475600DC0EB7 /* AboutContent.md in Resources */,
 				3507D1A42F19465B00F796FD /* Videos in Resources */,
 				35091A852F18F59D00C18528 /* Assets.xcassets in Resources */,
 				3533BB6C2F1D1F140083AA5B /* LaunchScreen.storyboard in Resources */,
@@ -163,10 +171,12 @@
 			files = (
 				35091A902F1909A100C18528 /* VideoQueue.swift in Sources */,
 				35091A8C2F19099900C18528 /* PlayerView.swift in Sources */,
+				356129D22F2141AF00DC0EB7 /* AboutContent.md in Sources */,
 				35091A922F190C1600C18528 /* Persistence.swift in Sources */,
 				35091A942F190C1A00C18528 /* StatsDrawer.swift in Sources */,
 				35091A8E2F19099C00C18528 /* ContentView.swift in Sources */,
 				35091A812F18F59C00C18528 /* ElapsedApp.swift in Sources */,
+				356129D42F2141D100DC0EB7 /* About.swift in Sources */,
 				352A3E812F193CC90068DBFF /* BoredomStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
